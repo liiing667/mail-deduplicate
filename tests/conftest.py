@@ -73,7 +73,7 @@ def config() -> Config:
         force_unlock=False,
         hash_headers=DEFAULT_HASH_HEADERS,
         minimal_headers=DEFAULT_MINIMAL_HEADERS,
-        hash_body=BodyHasher.SKIP,
+        hash_body=BodyHasher.NORMALIZED,
         hash_only=False,
         cache=False,
         cache_path=None,

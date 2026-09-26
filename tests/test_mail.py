@@ -19,6 +19,8 @@ from __future__ import annotations
 import base64
 import email
 import email.header
+import quopri
+import re
 from mailbox import Maildir, mbox
 from pathlib import Path
 from typing import Any, cast
@@ -144,6 +146,137 @@ def test_decode_part_falls_back_to_raw_when_charset_fails():
     )
     # The undecodable payload does not raise and leaves a non-empty body.
     assert create_mail_from_bytes(raw).body_lines
+
+
+SAMPLE_HEADERS = (
+    b"Date: Mon, 04 Mar 2024 10:00:00 +0000\n"
+    b"From: Bob <bob@nohost.com>\n"
+    b"To: recipient@nohost.com\n"
+    b"Message-Id: <sample@nohost.com>\n"
+    b"Mime-Version: 1.0\n"
+    b'Content-Type: text/plain; charset="utf-8"\n'
+)
+"""A header block carrying enough of the default hash headers to clear the
+minimal-headers floor."""
+
+
+def create_hashing_mail(raw: bytes, config) -> DedupMailMixin:
+    """Parse raw bytes into a mail carrying the configuration hash computation
+    needs."""
+    mail = create_mail_from_bytes(raw)
+    mail.conf = config
+    return mail
+
+
+def test_dedup_key_labels_its_components(config):
+    """The dedup key is an explainable composite: the labeled digest of the canonical
+    headers, plus the labeled digest of the body when it takes part in the hash."""
+    mail = create_hashing_mail(SAMPLE_HEADERS + b"Subject: s\n\nBody text.\n", config)
+
+    # Without a body hash, the key reduces to its headers component.
+    assert mail.dedup_key() == f"headers:{mail.hash_key()}"
+    assert mail.dedup_key("") == f"headers:{mail.hash_key()}"
+
+    key = mail.dedup_key(mail.hash_normalized_body)
+    assert key == f"headers:{mail.hash_key()}+body:{mail.hash_normalized_body}"
+    assert re.fullmatch(r"headers:[0-9a-f]{56}\+body:[0-9a-f]{56}", key)
+
+
+def test_rfc2047_reencoded_headers_share_hash(config):
+    """A copy whose headers were re-encoded as RFC 2047 encoded-words in transit
+    hashes to the same key as its unencoded twin."""
+    plain = create_hashing_mail(
+        SAMPLE_HEADERS + b"Subject: Weekly report 123\n\nBody text.\n", config
+    )
+    reencoded = create_hashing_mail(
+        SAMPLE_HEADERS.replace(
+            b"From: Bob <bob@nohost.com>\n",
+            b"From: =?utf-8?q?Bob?= <bob@nohost.com>\n",
+        )
+        + b"Subject: =?utf-8?q?Weekly_report_123?=\n"
+        + b"\nBody text.\n",
+        config,
+    )
+
+    assert plain.hash_key() == reencoded.hash_key()
+    assert plain.dedup_key(plain.hash_normalized_body) == reencoded.dedup_key(
+        reencoded.hash_normalized_body
+    )
+
+
+def test_malformed_encoded_word_kept_as_is(config):
+    """An encoded-word that cannot be decoded is hashed as-is, not rejected."""
+    mail = create_hashing_mail(
+        SAMPLE_HEADERS + b"Subject: =?utf-8?b?bad!!!?=\n\nBody\n", config
+    )
+    assert list(mail.normalized_header_values("subject")) == ["=?utf-8?b?bad!!!?="]
+
+
+def test_reencoded_body_shares_normalized_hash(config):
+    """The same body transported as plain text, base64 or quoted-printable decodes
+    to the same lines, and so to the same normalized body hash."""
+    text = "Hello world, this is the body.\nSecond line here.\n"
+    plain = create_hashing_mail(
+        SAMPLE_HEADERS + b"Subject: s\n\n" + text.encode(), config
+    )
+    as_base64 = create_hashing_mail(
+        SAMPLE_HEADERS
+        + b"Subject: s\n"
+        + b"Content-Transfer-Encoding: base64\n"
+        + b"\n"
+        + base64.b64encode(text.encode())
+        + b"\n",
+        config,
+    )
+    as_quoted_printable = create_hashing_mail(
+        SAMPLE_HEADERS
+        + b"Subject: s\n"
+        + b"Content-Transfer-Encoding: quoted-printable\n"
+        + b"\n"
+        + quopri.encodestring(text.encode())
+        + b"\n",
+        config,
+    )
+
+    assert plain.body_lines == as_base64.body_lines == as_quoted_printable.body_lines
+    assert (
+        plain.hash_normalized_body
+        == as_base64.hash_normalized_body
+        == as_quoted_printable.hash_normalized_body
+    )
+
+
+def test_normalized_body_hash_folds_case_and_whitespace(config):
+    """Copies drifting only in capitalization and spacing share a normalized body
+    hash, while their raw hashes still differ."""
+    drifted = create_hashing_mail(
+        SAMPLE_HEADERS + b"Subject: s\n\nHello   WORLD\n", config
+    )
+    folded = create_hashing_mail(
+        SAMPLE_HEADERS + b"Subject: s\n\nhello world\n", config
+    )
+
+    assert drifted.hash_normalized_body == folded.hash_normalized_body
+    assert drifted.hash_raw_body != folded.hash_raw_body
+
+
+def test_mails_sharing_body_prefix_stay_distinct(config):
+    """Two genuinely different mails whose bodies start with the same lines get
+    different keys: the body digest covers the whole body, not a prefix."""
+    shared_prefix = b"Dear user, your weekly summary follows.\nAccount: 42\n"
+    mail_a = create_hashing_mail(
+        SAMPLE_HEADERS + b"Subject: s\n\n" + shared_prefix + b"Balance: 10\n", config
+    )
+    mail_b = create_hashing_mail(
+        SAMPLE_HEADERS + b"Subject: s\n\n" + shared_prefix + b"Balance: 99999\n",
+        config,
+    )
+
+    assert mail_a.body_lines[:2] == mail_b.body_lines[:2]
+    assert mail_a.hash_normalized_body != mail_b.hash_normalized_body
+    assert mail_a.dedup_key(mail_a.hash_normalized_body) != mail_b.dedup_key(
+        mail_b.hash_normalized_body
+    )
 
 
 @pytest.mark.parametrize(

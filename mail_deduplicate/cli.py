@@ -355,13 +355,15 @@ def ignored_step_options(ctx) -> list[str]:
     option(
         "-b",
         "--hash-body",
-        default=BodyHasher.SKIP,
+        default=BodyHasher.NORMALIZED,
         type=EnumChoice(BodyHasher),
-        help=f"Method used to hash the body of mails. Defaults to {BodyHasher.SKIP}, "
-        "which doesn't hash the body at all: it is the fastest method and header-based "
-        f"hash should be sufficient to determine duplicate set. {BodyHasher.RAW} use "
-        f"the body as it is (slow). {BodyHasher.NORMALIZED} pre-process the body "
-        "before hashing, by removing all line breaks and spaces (slowest).",
+        help=f"Method used to hash the body of mails. Defaults to "
+        f"{BodyHasher.NORMALIZED}, which pre-processes the body before hashing by "
+        "removing all line breaks and spaces and folding case, so re-encoded or "
+        f"re-wrapped copies of a mail still share its hash. {BodyHasher.RAW} uses "
+        f"the body as it is. {BodyHasher.SKIP} doesn't hash the body at all: it is "
+        "the fastest method, but mails with identical headers and different bodies "
+        "are then reported as duplicates.",
     ),
     option(
         "-H",
@@ -670,7 +672,7 @@ def mdedup(
             for mail in all_mails:
                 with mail.hydrated():
                     echo(mail.pretty_canonical_headers())
-                    echo(f"Hash: {mail.hash_key()}")
+                    echo(f"Hash: {mail.dedup_key(conf['hash_body'].function(mail))}")
 
         # Exit right away, releasing the boxes and the cache on the way out.
         dedup.close_all()

@@ -68,7 +68,7 @@ Standalone binaries of `mdedup`'s latest version are available as direct downloa
 
 Duplicate mails pile up whenever boxes get copied around: backups of the same account taken at different times, per-folder exports where a mail tagged with several labels lands in several boxes, archives consolidated from multiple clients, or IMAP synchronizations gone wrong.
 
-`mdedup` cleans this up. Point it at your boxes: it groups copies of the same mail by hashing a curated set of headers, applies a `--strategy` to pick which copy to keep in each group, then performs an `--action` on the result. The default action is the safest one: sources are only read, and the deduplicated selection is written to a brand new box.
+`mdedup` cleans this up. Point it at your boxes: it groups copies of the same mail by combining a hash of a curated set of normalized headers with a digest of the body, applies a `--strategy` to pick which copy to keep in each group, then performs an `--action` on the result. The default action is the safest one: sources are only read, and the deduplicated selection is written to a brand new box.
 
 So to merge two overlapping archives into a single clean box:
 

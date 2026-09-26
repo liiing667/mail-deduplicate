@@ -157,6 +157,9 @@ def test_delete_selected_spares_mails_without_duplicates(invoke, make_box, jobs)
 
     result = invoke(
         f"--jobs={jobs}",
+        # Group the two copies despite their different bodies, so the size
+        # threshold is what sets their set aside.
+        "--hash-body=skip",
         "--strategy=select-all-but-one",
         "--action=delete-selected",
         box_path,
@@ -252,10 +255,11 @@ def test_hardlink_discarded_dry_run_leaves_files_alone(invoke, make_box):
 
 DIFFERING_COPIES = [
     MailFactory(body="Slightly different body.\n"),
-    MailFactory(body="Slightly different bodies.\n"),
+    MailFactory(body="Slightly   different\tbody.\n"),
 ]
-"""Two mails sharing a hash, as the body is left out of it by default, but backed by
-files differing byte for byte."""
+"""Two mails sharing a hash, as their bodies only differ in whitespace which the
+default normalized body hash folds away, but backed by files differing byte for
+byte."""
 
 
 @pytest.mark.parametrize(

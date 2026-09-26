@@ -211,6 +211,9 @@ def test_unparsable_date_show_diff(invoke, make_box):
     box_path, box_type, _ = make_box(Maildir, [undated_mail, undated_variant])
 
     result = invoke(
+        # Group both mails in one set despite their different bodies, so the
+        # content threshold has a pair to diff.
+        "--hash-body=skip",
         "--content-threshold=0",
         "--show-diff",
         "--strategy=select-oldest",
@@ -280,6 +283,67 @@ def test_hash_body_raw_vs_normalized(invoke, make_box, hash_body, deduplicated):
 
     assert result.exit_code == 0
     assert len(Maildir(box_path, create=False)) == (1 if deduplicated else 2)
+
+
+def test_reencoded_copy_dedupes_but_lookalike_survives(invoke, tmp_path):
+    """End-to-end regression test for both misjudgment directions.
+
+    A copy re-encoded in transit (RFC 2047 encoded-word headers, base64 body,
+    drifted whitespace and capitalization) must hash to the same key as the
+    original and be deduplicated with it, while a genuinely different mail whose
+    body only shares its first lines must not be reported as a duplicate.
+    """
+    headers = (
+        b"Date: Mon, 04 Mar 2024 10:00:00 +0000\n"
+        b"To: recipient@nohost.com\n"
+        b"Message-Id: <report@nohost.com>\n"
+        b"Mime-Version: 1.0\n"
+        b'Content-Type: text/plain; charset="utf-8"\n'
+    )
+    original = (
+        headers
+        + b"From: Bob <bob@nohost.com>\n"
+        + b"Subject: Weekly report 123\n"
+        + b"\n"
+        + b"Dear user, your weekly summary follows.\n"
+        + b"Account: 42\n"
+        + b"Balance: 10\n"
+    )
+    reencoded_copy = (
+        headers
+        + b"From: =?utf-8?q?Bob?= <bob@nohost.com>\n"
+        + b"Subject: =?utf-8?q?Weekly_report_123?=\n"
+        + b"Content-Transfer-Encoding: base64\n"
+        + b"\n"
+        # Base64 of the same body, re-wrapped and re-capitalized.
+        + b"ZGVhciAgIHVzZXIsIHlvdXIgd2Vla2x5CnN1bW1hcnkgZm9sbG93cy4KQUNDT1VO\n"
+        + b"VDogNDIKQmFsYW5jZTogMTAK\n"
+    )
+    # Same headers and same first body lines as the original, but a different mail.
+    lookalike = (
+        headers
+        + b"From: Bob <bob@nohost.com>\n"
+        + b"Subject: Weekly report 123\n"
+        + b"\n"
+        + b"Dear user, your weekly summary follows.\n"
+        + b"Account: 42\n"
+        + b"Balance: 99999\n"
+    )
+
+    box_path = tmp_path / "maildir"
+    box = Maildir(str(box_path), create=True)
+    for raw in (original, reencoded_copy, lookalike):
+        box.add(raw)
+    box.close()
+
+    result = invoke(
+        "--strategy=select-one", "--action=delete-discarded", str(box_path)
+    )
+
+    assert result.exit_code == 0
+    # The re-encoded copy was deduplicated with the original; the lookalike was
+    # left alone.
+    assert len(Maildir(str(box_path), create=False)) == 2
 
 
 def test_ctime_time_source(invoke, make_box):

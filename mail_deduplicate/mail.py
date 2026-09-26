@@ -27,7 +27,8 @@ import os
 import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from email.header import Header
+from email.errors import HeaderParseError
+from email.header import Header, decode_header, make_header
 from functools import cached_property
 from mailbox import Message
 from typing import cast
@@ -407,7 +408,10 @@ class DedupMailMixin(Message):
         return cast(str, part.get_payload(decode=False))
 
     def hash_key(self) -> str:
-        """Returns the canonical hash of a mail.
+        """Returns the canonical hash of a mail's headers.
+
+        This is the headers component of the dedup key: see `dedup_key()` for the
+        full composite a mail is grouped by.
 
         ```{caution}
         This method hasn't been made explicitly into a cached property in order to
@@ -420,6 +424,25 @@ class DedupMailMixin(Message):
         logging.debug(f"Hash: {hash_value}")
         return hash_value
 
+    def dedup_key(self, body_hash: str = "") -> str:
+        """Returns the deduplication key of a mail, as an explainable composite.
+
+        The key is the combination of the digest of the canonical headers and,
+        when the body takes part in the hash, the digest of the body. Each
+        component is labeled, so a key found in the logs or in the hash cache can
+        be traced back to the values that produced it:
+        `headers:<digest>` or `headers:<digest>+body:<digest>`.
+
+        ```{caution}
+        Like `hash_key()`, this method hasn't been made explicitly into a cached
+        property in order to reduce the overall memory footprint.
+        ```
+        """
+        headers_hash = self.hash_key()
+        if not body_hash:
+            return f"headers:{headers_hash}"
+        return f"headers:{headers_hash}+body:{body_hash}"
+
     @cached_property
     def hash_raw_body(self) -> str:
         """Returns the canonical body hash of a mail."""
@@ -430,9 +453,14 @@ class DedupMailMixin(Message):
 
     @cached_property
     def hash_normalized_body(self) -> str:
-        """Returns the normalized body hash of a mail."""
+        """Returns the normalized body hash of a mail.
+
+        Normalization strips all whitespace and folds case, so copies of a mail
+        that only drifted in spacing or capitalization hash to the same body,
+        while genuinely different bodies still produce different hashes.
+        """
         serialized_normalized_body = "".join(
-            [re.sub(r"\s", "", line) for line in self.body_lines],
+            [re.sub(r"\s", "", line).casefold() for line in self.body_lines],
         ).encode("utf-8")
         hash_value = hashlib.sha224(serialized_normalized_body).hexdigest()
         logging.debug(f"Body normalized hash: {hash_value}")
@@ -525,6 +553,10 @@ class DedupMailMixin(Message):
             else:
                 value = header_value
 
+            # Decode RFC 2047 encoded-words, so a header re-encoded in transit
+            # hashes to the same value as its unencoded twin.
+            value = self.decode_encoded_words(value)
+
             # Normalize whitespace
             value = " ".join(value.split())
 
@@ -538,6 +570,21 @@ class DedupMailMixin(Message):
             # Only return non-empty values
             if value.strip():
                 yield value
+
+    @staticmethod
+    def decode_encoded_words(value: str) -> str:
+        """Decode RFC 2047 encoded-words (`=?charset?b?...?=`) to plain text.
+
+        Whitespace between adjacent encoded-words is dropped, as mandated by the
+        RFC. A value that cannot be decoded is returned as-is: normalization must
+        never reject a header, only canonicalize it.
+        """
+        if "=?" not in value:
+            return value
+        try:
+            return str(make_header(decode_header(value)))
+        except (HeaderParseError, ValueError, LookupError):
+            return value
 
     def normalize_subject(self, subject: str) -> str:
         """Strip `Re:`/`Fwd:` and `[list-name]` prefixes from `Subject`.

@@ -5,7 +5,7 @@ This CLI reads mails, then automatically detects, regroup and act on duplicates.
 Process:
 
 - Step #1: load mails from their sources.
-- Step #2: compute the canonical hash of each mail based on their headers (and optionally their body), and regroup mails sharing the same hash.
+- Step #2: compute the canonical dedup key of each mail by combining a hash of their normalized headers with a digest of their body, and regroup mails sharing the same key.
 - Step #3: apply a selection strategy on each subset of duplicate mails.
 - Step #4: perform an action on all selected mails.
 - Step #5: report statistics.
@@ -27,6 +27,19 @@ That is why `mdedup` propose to identify uniqueness of mails based on an ordered
 Hashing is done by cherry-picking certain headers, in some cases doing some minor tweaking of the values to reduce them to a canonical form, and then computing a hash of those headers concatenated together.
 
 The list of headers to consider can be set with the `-h`/`--hash-header` option.
+
+### Dedup key composition
+
+The key a mail is grouped by is an explainable composite: `headers:<digest>` when the body is left out, `headers:<digest>+body:<digest>` otherwise. Each component is labeled so a key found in the logs or in the hash cache can be traced back to the values that produced it.
+
+Normalization makes the key insensitive to the transformations a copy picks up in transit, without collapsing genuinely different mails:
+
+- header values are decoded from their RFC 2047 encoded-word form (`=?utf-8?b?...?=`), so a re-encoded header hashes like its unencoded twin;
+- header whitespace is collapsed, and a few headers get a dedicated canonicalization (see `normalize_*` methods in `mail.py`);
+- the body is decoded from its `Content-Transfer-Encoding` (`base64`, `quoted-printable`), then hashed either raw or normalized, the default being normalized: all whitespace is stripped and case is folded, so re-wrapped or re-capitalized copies still match;
+- because the body digest covers the whole body, two different mails that merely share their first lines still get different keys.
+
+The `-b`/`--hash-body` option selects the body hashing method. It defaults to `normalized`; `skip` leaves the body out of the key entirely, which is faster but reports mails with identical headers and different bodies as duplicates.
 
 ```{tip}
 You can use `Message-ID` as the sole reference header by passing `--hash-header Message-ID` to the CLI.

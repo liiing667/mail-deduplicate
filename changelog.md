@@ -7,6 +7,10 @@
 
 - Ship the test suite in the PyPI sdist, so downstream packagers can build and test without a Git checkout.
 - Publish a sitemap and a custom 404 page with the documentation, and stop publishing a copy of every documentation source under `_sources/`.
+- Make the dedup key explainable: it is now the labeled combination of the canonical-headers digest and the body digest (`headers:<digest>+body:<digest>`), in logs, in `--hash-only` output and in the hash cache, whose format version is bumped to `2`.
+- Decode RFC 2047 encoded-words in hashed headers, so a copy whose headers were re-encoded in transit hashes like the original.
+- Fold case in the normalized body hash, on top of stripping whitespace, so copies drifting only in capitalization are still detected as duplicates.
+- Default `--hash-body` to `normalized` instead of `skip`, so two different mails sharing their headers are no longer reported as duplicates out of the box. Pass `--hash-body=skip` to restore the previous headers-only behavior.
 
 ## [`9.3.2` (2026-09-18)](https://github.com/kdeldycke/mail-deduplicate/compare/v9.3.1...v9.3.2)
 

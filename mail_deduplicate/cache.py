@@ -49,8 +49,9 @@ if TYPE_CHECKING:
     from .cli import Config
 
 
-SCHEMA_VERSION = "1"
-"""Bumped whenever the table layout changes, to discard databases of older shapes."""
+SCHEMA_VERSION = "2"
+"""Bumped whenever the table layout or the hash format changes, to discard databases
+of older shapes."""
 
 CACHED_SETTINGS = ("hash_headers", "hash_body", "time_source")
 """Configuration keys whose value changes what gets cached.

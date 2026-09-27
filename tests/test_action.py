@@ -156,6 +156,7 @@ def test_delete_selected_spares_mails_without_duplicates(invoke, make_box, jobs)
     )
 
     result = invoke(
+        "--hash-body=skip",
         f"--jobs={jobs}",
         "--strategy=select-all-but-one",
         "--action=delete-selected",
@@ -254,8 +255,8 @@ DIFFERING_COPIES = [
     MailFactory(body="Slightly different body.\n"),
     MailFactory(body="Slightly different bodies.\n"),
 ]
-"""Two mails sharing a hash, as the body is left out of it by default, but backed by
-files differing byte for byte."""
+"""Two mails sharing a hash once the body is left out of it with `--hash-body=skip`,
+but backed by files differing byte for byte."""
 
 
 @pytest.mark.parametrize(
@@ -273,6 +274,7 @@ def test_hardlink_discarded_gates_on_byte_equality(
     box_path, _, _ = make_box(Maildir, DIFFERING_COPIES)
 
     result = invoke(
+        "--hash-body=skip",
         "--strategy=select-one",
         "--action=hardlink-discarded",
         *extra_args,

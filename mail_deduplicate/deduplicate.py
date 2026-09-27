@@ -547,7 +547,6 @@ def _init_hash_worker(conf: Config, message_class: type) -> None:
     """Prepare a worker process to hash mails of one box format."""
     _WORKER["conf"] = conf
     _WORKER["message_class"] = message_class
-    _WORKER["body_hasher"] = conf["hash_body"].function
 
 
 def _load_worker_mail(source_path: str, mail_id: str, path: str) -> DedupMailMixin:
@@ -580,7 +579,7 @@ def _hash_in_worker(task: tuple[str, str, str]) -> HashedMail:
         return HashedMail(None, None, None, f"unreadable file: {expt}")
 
     try:
-        mail_hash = mail.hash_key() + _WORKER["body_hasher"](mail)
+        mail_hash = mail.dedup_key()
     except TooFewHeaders as expt:
         return HashedMail(None, None, None, expt.args[0])
 
@@ -996,8 +995,6 @@ class Deduplicate:
             "compute hashes.",
         )
 
-        body_hasher = self.conf["hash_body"].function
-
         def compute(box, mail_id, mail):
             """Hash a single parsed mail, in this very process.
 
@@ -1007,7 +1004,7 @@ class Deduplicate:
             mail.add_box_metadata(box, mail_id)
             mail.conf = self.conf
             try:
-                return mail, mail.hash_key() + body_hasher(mail), None
+                return mail, mail.dedup_key(), None
             except TooFewHeaders as expt:
                 return mail, None, expt
             finally:

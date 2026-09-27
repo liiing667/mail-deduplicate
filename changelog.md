@@ -5,6 +5,8 @@
 > [!WARNING]
 > This version is **not released yet** and is under active development.
 
+- Fold a digest of the body into the deduplication key by default (`--hash-body` now defaults to `normalized`), so mails sharing their headers but not their content are no longer deduplicated. The normalized digest flattens whitespace and case differences and decodes RFC-2047 encoded-words in headers, so copies re-encoded in transit are still recognized.
+- Show the header and body components of each mail's deduplication key in `-H`/`--hash-only` output.
 - Ship the test suite in the PyPI sdist, so downstream packagers can build and test without a Git checkout.
 - Publish a sitemap and a custom 404 page with the documentation, and stop publishing a copy of every documentation source under `_sources/`.
 

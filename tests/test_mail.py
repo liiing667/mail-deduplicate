@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import email
 import email.header
+import quopri
 from mailbox import Maildir, mbox
 from pathlib import Path
 from typing import Any, cast
@@ -90,6 +91,75 @@ def test_body_hashes_distinguish_and_normalize():
     # the base, but a real word change still differs.
     assert base.hash_normalized_body == spaced.hash_normalized_body
     assert base.hash_normalized_body != different.hash_normalized_body
+
+
+def test_normalized_body_hash_ignores_case():
+    """`hash_normalized_body` folds case, so a copy re-cased in transit hashes like
+    the original, while `hash_raw_body` still reflects the difference."""
+    base = create_mail_from_bytes(b"Subject: s\n\nHello World\n")
+    recased = create_mail_from_bytes(b"Subject: s\n\nhello world\n")
+
+    assert base.hash_raw_body != recased.hash_raw_body
+    assert base.hash_normalized_body == recased.hash_normalized_body
+
+
+def test_normalized_body_hash_ignores_transfer_encoding():
+    """A body re-encoded in transit (8bit, base64 or quoted-printable) decodes to
+    the same text, so all three forms share the same normalized body hash."""
+    text = "Hello wörld, this is the body.\n"
+    headers = (
+        b"Subject: s\n"
+        b'Content-Type: text/plain; charset="utf-8"\n'
+        b"Content-Transfer-Encoding: "
+    )
+    bit8 = create_mail_from_bytes(headers + b"8bit\n\n" + text.encode("utf-8"))
+    base64_mail = create_mail_from_bytes(
+        headers + b"base64\n\n" + base64.b64encode(text.encode("utf-8")) + b"\n"
+    )
+    qp_mail = create_mail_from_bytes(
+        headers
+        + b"quoted-printable\n\n"
+        + quopri.encodestring(text.encode("utf-8"))
+        + b"\n"
+    )
+
+    assert bit8.hash_normalized_body == base64_mail.hash_normalized_body
+    assert bit8.hash_normalized_body == qp_mail.hash_normalized_body
+
+
+def test_normalized_body_hash_covers_whole_body():
+    """Two bodies sharing their first lines but differing further down hash
+    differently: the digest covers the whole body, not a prefix."""
+    mail_a = create_mail_from_bytes(b"Subject: s\n\nShared first line.\nEnding A.\n")
+    mail_b = create_mail_from_bytes(b"Subject: s\n\nShared first line.\nEnding B.\n")
+
+    assert mail_a.hash_normalized_body != mail_b.hash_normalized_body
+
+
+def test_dedup_key_combines_header_and_body_hashes(config):
+    """The deduplication key is the header hash and the configured body digest
+    concatenated, so both components are reflected in the mails' grouping."""
+    headers = (
+        b"Date: Mon, 01 Feb 2021 00:00:00 +0000\n"
+        b"From: foo@bar.com\n"
+        b"To: baz\n"
+        b"Message-ID: <dedup-key@nohost.com>\n"
+        b"Subject: s\n"
+    )
+    mail = create_mail_from_bytes(headers + b"\nHello world\n")
+    mail.conf = config
+
+    assert mail.dedup_key() == mail.hash_key() + mail.hash_normalized_body
+
+    # Same headers, different body: different keys.
+    other = create_mail_from_bytes(headers + b"\nGoodbye world\n")
+    other.conf = config
+    assert mail.dedup_key() != other.dedup_key()
+
+    # Same headers, re-cased and re-spaced body: same key.
+    noisy = create_mail_from_bytes(headers + b"\nhello   world\n")
+    noisy.conf = config
+    assert mail.dedup_key() == noisy.dedup_key()
 
 
 def test_body_lines_gathers_multipart_preamble_and_epilogue():
@@ -531,6 +601,25 @@ def test_decode_part_falls_back_to_raw_when_charset_fails():
             ["<nested<brackets>@domain.com>"],
             id="message-id-nested-brackets-preserved",
         ),
+        # === RFC-2047 encoded-words decoding ===
+        pytest.param(
+            "Subject",
+            ["=?utf-8?q?Caf=C3=A9_d=C3=A9j=C3=A0_vu?="],
+            ["Café déjà vu"],
+            id="subject-rfc2047-quoted-printable-decoded",
+        ),
+        pytest.param(
+            "Subject",
+            ["=?UTF-8?B?w6l0w6kgZGFpc3k=?="],
+            ["été daisy"],
+            id="subject-rfc2047-base64-decoded",
+        ),
+        pytest.param(
+            "Subject",
+            ["=?utf-8?b?a?="],
+            ["=?utf-8?b?a?="],
+            id="subject-rfc2047-malformed-left-as-is",
+        ),
     ],
 )
 def test_header_normalization(header_name, values, expected):
@@ -539,6 +628,30 @@ def test_header_normalization(header_name, values, expected):
     mail = create_mail_with_headers(*headers)
     result = list(mail.normalized_header_values(header_name.lower()))
     assert result == expected
+
+
+def test_rfc2047_encoded_headers_share_hash(config):
+    """A mail whose headers were re-encoded as RFC-2047 encoded-words in transit
+    hashes to the same canonical headers as its plain copy."""
+    plain = create_mail_with_headers(
+        ("Date", "Mon, 01 Feb 2021 00:00:00 +0000"),
+        ("From", "foo@bar.com"),
+        ("To", "baz"),
+        ("Message-ID", "<rfc2047@nohost.com>"),
+        ("Subject", "Café déjà vu"),
+    )
+    encoded = create_mail_with_headers(
+        ("Date", "Mon, 01 Feb 2021 00:00:00 +0000"),
+        ("From", "foo@bar.com"),
+        ("To", "baz"),
+        ("Message-ID", "<rfc2047@nohost.com>"),
+        ("Subject", "=?utf-8?q?Caf=C3=A9_d=C3=A9j=C3=A0_vu?="),
+    )
+    for mail in (plain, encoded):
+        mail.conf = config
+
+    assert plain.canonical_headers == encoded.canonical_headers
+    assert plain.hash_key() == encoded.hash_key()
 
 
 @pytest.mark.parametrize("date_value", ["invalid date", "", "Hello, World!"])

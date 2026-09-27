@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from mailbox import Maildir, mbox, mboxMessage
 from textwrap import dedent
@@ -211,6 +212,7 @@ def test_unparsable_date_show_diff(invoke, make_box):
     box_path, box_type, _ = make_box(Maildir, [undated_mail, undated_variant])
 
     result = invoke(
+        "--hash-body=skip",
         "--content-threshold=0",
         "--show-diff",
         "--strategy=select-oldest",
@@ -280,6 +282,73 @@ def test_hash_body_raw_vs_normalized(invoke, make_box, hash_body, deduplicated):
 
     assert result.exit_code == 0
     assert len(Maildir(box_path, create=False)) == (1 if deduplicated else 2)
+
+
+def test_reencoded_copy_deduplicated_by_default(invoke, make_box):
+    """Regression test: copies of a mail archived in different folders were
+    re-encoded in transit (another `Content-Transfer-Encoding`, re-wrapped,
+    re-cased and re-spaced body). The default deduplication key folds that
+    encoding noise, so the copies are recognized as duplicates."""
+    original = MailFactory(
+        date="2021-01-01",
+        message_id="<reencoded@nohost.com>",
+        body="Hello World, this is a duplicate mail.\n",
+    )
+    box_path, _, _ = make_box(Maildir, [original])
+
+    # The same mail as it landed in another folder: base64 body, re-wrapped
+    # lines, different case and spacing, but the same words.
+    variant_text = "hello  world,   this is a\nduplicate mail.\n"
+    reencoded = (
+        original.render()
+        .replace(
+            b"Content-Transfer-Encoding: 8bit",
+            b"Content-Transfer-Encoding: base64",
+        )
+        .replace(
+            b"Hello World, this is a duplicate mail.\n",
+            base64.b64encode(variant_text.encode("utf-8")),
+        )
+    )
+    box = Maildir(box_path, create=False)
+    box.lock()
+    box.add(reencoded)
+    box.close()
+
+    result = invoke(
+        "--strategy=select-one",
+        "--action=delete-discarded",
+        box_path,
+    )
+
+    assert result.exit_code == 0
+    assert len(Maildir(box_path, create=False)) == 1
+
+
+def test_same_prefix_different_bodies_not_duplicates(invoke, make_box):
+    """Regression test: two genuinely different mails sharing their headers and
+    the first lines of their body were wrongly deduplicated when the key ignored
+    the body. The default key now digests the whole body, so both survive."""
+    mail_a = MailFactory(
+        date="2021-01-01",
+        message_id="<prefix@nohost.com>",
+        body="Weekly report.\nSales: 100 units.\n",
+    )
+    mail_b = MailFactory(
+        date="2021-01-01",
+        message_id="<prefix@nohost.com>",
+        body="Weekly report.\nSales: 250 units.\n",
+    )
+    box_path, box_type, _ = make_box(Maildir, [mail_a, mail_b])
+
+    result = invoke(
+        "--strategy=select-one",
+        "--action=delete-discarded",
+        box_path,
+    )
+
+    assert result.exit_code == 0
+    check_box(box_path, box_type, content=[mail_a, mail_b])
 
 
 def test_ctime_time_source(invoke, make_box):

@@ -5,7 +5,7 @@ This CLI reads mails, then automatically detects, regroup and act on duplicates.
 Process:
 
 - Step #1: load mails from their sources.
-- Step #2: compute the canonical hash of each mail based on their headers (and optionally their body), and regroup mails sharing the same hash.
+- Step #2: compute the canonical hash of each mail by combining their normalized headers with a digest of their body, and regroup mails sharing the same hash.
 - Step #3: apply a selection strategy on each subset of duplicate mails.
 - Step #4: perform an action on all selected mails.
 - Step #5: report statistics.
@@ -24,7 +24,9 @@ The reality is messier. There is no guarantee that `Message-ID` is unique or eve
 
 That is why `mdedup` propose to identify uniqueness of mails based on an ordered hashed list of headers.
 
-Hashing is done by cherry-picking certain headers, in some cases doing some minor tweaking of the values to reduce them to a canonical form, and then computing a hash of those headers concatenated together.
+Hashing is done by cherry-picking certain headers, in some cases doing some minor tweaking of the values to reduce them to a canonical form, and then computing a hash of those headers concatenated together. RFC-2047 encoded-words are decoded first, so a header re-encoded in transit hashes to the same value as its plain form.
+
+The header hash is then combined with a digest of the body to produce the mail's deduplication key. By default the body is normalized before hashing: all whitespace and case differences are flattened, so copies re-encoded in transit (another `Content-Transfer-Encoding`, re-wrapped lines, re-cased text) still share the key of the original, while genuinely different bodies are told apart. The `-b`/`--hash-body` option switches this to the raw body, or skips the body entirely.
 
 The list of headers to consider can be set with the `-h`/`--hash-header` option.
 

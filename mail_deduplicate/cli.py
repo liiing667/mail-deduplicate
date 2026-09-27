@@ -355,13 +355,17 @@ def ignored_step_options(ctx) -> list[str]:
     option(
         "-b",
         "--hash-body",
-        default=BodyHasher.SKIP,
+        default=BodyHasher.NORMALIZED,
         type=EnumChoice(BodyHasher),
-        help=f"Method used to hash the body of mails. Defaults to {BodyHasher.SKIP}, "
-        "which doesn't hash the body at all: it is the fastest method and header-based "
-        f"hash should be sufficient to determine duplicate set. {BodyHasher.RAW} use "
-        f"the body as it is (slow). {BodyHasher.NORMALIZED} pre-process the body "
-        "before hashing, by removing all line breaks and spaces (slowest).",
+        help="Method used to hash the body of mails. The resulting digest is "
+        "appended to the header-based hash to produce each mail's deduplication "
+        f"key. Defaults to {BodyHasher.NORMALIZED}, which pre-processes the body "
+        "before hashing by removing all whitespace and case differences, so "
+        "re-encoded copies of a mail still share its key while genuinely "
+        "different bodies are told apart. "
+        f"{BodyHasher.RAW} uses the body as it is. {BodyHasher.SKIP} doesn't "
+        "hash the body at all: it is the fastest method, but mails sharing their "
+        "headers are then considered duplicates regardless of their content.",
     ),
     option(
         "-H",
@@ -599,8 +603,9 @@ def mdedup(
     \b
     Process:
     - Step #1: load mails from their sources.
-    - Step #2: compute the canonical hash of each mail based on their headers (and
-               optionally their body), and regroup mails sharing the same hash.
+    - Step #2: compute the canonical hash of each mail by combining their
+               normalized headers with a digest of their body, and regroup mails
+               sharing the same hash.
     - Step #3: apply a selection strategy on each subset of duplicate mails.
     - Step #4: perform an action on all selected mails.
     - Step #5: report statistics.
@@ -670,7 +675,12 @@ def mdedup(
             for mail in all_mails:
                 with mail.hydrated():
                     echo(mail.pretty_canonical_headers())
-                    echo(f"Hash: {mail.hash_key()}")
+                    header_hash = mail.hash_key()
+                    body_hash = conf["hash_body"].function(mail)
+                    echo(f"Header hash: {header_hash}")
+                    if conf["hash_body"] is not BodyHasher.SKIP:
+                        echo(f"Body hash ({conf['hash_body']}): {body_hash}")
+                    echo(f"Hash: {header_hash + body_hash}")
 
         # Exit right away, releasing the boxes and the cache on the way out.
         dedup.close_all()

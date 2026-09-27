@@ -20,6 +20,8 @@ flat."""
 from __future__ import annotations
 
 import copy
+import email.errors
+import email.header
 import email.utils
 import hashlib
 import logging
@@ -407,7 +409,11 @@ class DedupMailMixin(Message):
         return cast(str, part.get_payload(decode=False))
 
     def hash_key(self) -> str:
-        """Returns the canonical hash of a mail.
+        """Returns the canonical hash of a mail's headers.
+
+        Only covers the headers: the body digest configured by `--hash-body` is
+        appended to this hash by the hashing step to produce the mail's full
+        deduplication key.
 
         ```{caution}
         This method hasn't been made explicitly into a cached property in order to
@@ -420,6 +426,28 @@ class DedupMailMixin(Message):
         logging.debug(f"Hash: {hash_value}")
         return hash_value
 
+    def dedup_key(self) -> str:
+        """Returns the mail's full deduplication key.
+
+        Combines the canonical hash of the normalized headers with the digest of
+        the body produced by the configured `--hash-body` method, so the key is
+        insensitive to encoding and whitespace noise while still telling genuinely
+        different mails apart.
+
+        ```{caution}
+        Like `hash_key()`, this method hasn't been made explicitly into a cached
+        property in order to reduce the overall memory footprint.
+        ```
+        """
+        header_hash = self.hash_key()
+        body_hash = self.conf["hash_body"].function(self)
+        key = header_hash + body_hash
+        logging.debug(
+            f"Deduplication key: {key} "
+            f"(header hash: {header_hash}, body hash: {body_hash})"
+        )
+        return key
+
     @cached_property
     def hash_raw_body(self) -> str:
         """Returns the canonical body hash of a mail."""
@@ -430,9 +458,15 @@ class DedupMailMixin(Message):
 
     @cached_property
     def hash_normalized_body(self) -> str:
-        """Returns the normalized body hash of a mail."""
+        """Returns the normalized body hash of a mail.
+
+        All whitespace and case differences are flattened, so copies of a mail
+        that were re-encoded in transit (another `Content-Transfer-Encoding`,
+        re-wrapped lines, re-cased text) still hash to the same digest, while
+        any genuine content difference is caught.
+        """
         serialized_normalized_body = "".join(
-            [re.sub(r"\s", "", line) for line in self.body_lines],
+            [re.sub(r"\s", "", line).casefold() for line in self.body_lines],
         ).encode("utf-8")
         hash_value = hashlib.sha224(serialized_normalized_body).hexdigest()
         logging.debug(f"Body normalized hash: {hash_value}")
@@ -525,6 +559,10 @@ class DedupMailMixin(Message):
             else:
                 value = header_value
 
+            # Decode RFC-2047 encoded-words, so a header re-encoded in transit
+            # hashes to the same value as its plain form.
+            value = self.decode_encoded_words(value)
+
             # Normalize whitespace
             value = " ".join(value.split())
 
@@ -538,6 +576,32 @@ class DedupMailMixin(Message):
             # Only return non-empty values
             if value.strip():
                 yield value
+
+    @staticmethod
+    def decode_encoded_words(value: str) -> str:
+        """Decode RFC-2047 encoded-words (`=?charset?encoding?text?=`) to plain text.
+
+        Copies of a mail transiting through different servers and list software get
+        their non-ASCII headers re-encoded: one copy carries
+        `=?utf-8?b?w6l0w6k=?=` where the other carries the raw `été`. Decoding the
+        encoded-words makes both hash to the same value. A value too malformed to
+        decode is returned as-is.
+        """
+        if "=?" not in value:
+            return value
+        try:
+            parts = email.header.decode_header(value)
+        except (email.errors.HeaderParseError, ValueError):
+            return value
+        decoded = []
+        for text, charset in parts:
+            if isinstance(text, bytes):
+                try:
+                    text = text.decode(charset or "ascii", "replace")
+                except (LookupError, ValueError):
+                    text = text.decode("utf-8", "replace")
+            decoded.append(text)
+        return "".join(decoded)
 
     def normalize_subject(self, subject: str) -> str:
         """Strip `Re:`/`Fwd:` and `[list-name]` prefixes from `Subject`.

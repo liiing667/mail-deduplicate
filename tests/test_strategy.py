@@ -379,7 +379,14 @@ def test_maildir_strategy(
     """Generic test to check the result of a selection strategy."""
     box_path, box_type, _ = make_box(Maildir, mailbox_input)
 
-    result = invoke(f"--strategy={strategy}", "--action=delete-selected", box_path)
+    # Group by the headers alone: the size-based fixtures only differ by their
+    # body, and this test exercises the selection strategies, not the hashing.
+    result = invoke(
+        "--hash-body=skip",
+        f"--strategy={strategy}",
+        "--action=delete-selected",
+        box_path,
+    )
 
     assert result.exit_code == 0
     check_box(box_path, box_type, content=mailbox_results)
@@ -559,7 +566,14 @@ def test_outlier_eviction_keeps_core_dedup(invoke, make_box):
         [smallest_mail, smallest_mail, outlier_mail],
     )
 
-    result = invoke("--strategy=select-one", "--action=delete-discarded", box_path)
+    # Group by the headers alone so the outlier shares a set with the copies:
+    # this test exercises the threshold-based eviction, not the hashing.
+    result = invoke(
+        "--hash-body=skip",
+        "--strategy=select-one",
+        "--action=delete-discarded",
+        box_path,
+    )
 
     assert result.exit_code == 0
     assert "Set aside 1 mails too dissimilar" in result.stderr
@@ -574,7 +588,12 @@ def test_dissimilar_pair_still_skipped(invoke, make_box):
     like before outlier eviction was introduced."""
     box_path, box_type, _ = make_box(Maildir, [smallest_mail, outlier_mail])
 
-    result = invoke("--strategy=select-one", "--action=delete-discarded", box_path)
+    result = invoke(
+        "--hash-body=skip",
+        "--strategy=select-one",
+        "--action=delete-discarded",
+        box_path,
+    )
 
     assert result.exit_code == 0
     assert "Skip set: mails are too dissimilar in size." in result.stderr
@@ -595,6 +614,7 @@ def test_eviction_is_not_transitive(invoke, make_box):
     box_path, _, _ = make_box(Maildir, chain)
 
     result = invoke(
+        "--hash-body=skip",
         "--content-threshold=-1",
         "--strategy=select-one",
         "--action=delete-discarded",
@@ -671,6 +691,7 @@ def test_content_dissimilar_pair_skipped_without_diff(invoke, make_box):
     box_path, box_type, _ = make_box(Maildir, [a, b])
 
     result = invoke(
+        "--hash-body=skip",
         "--content-threshold=0",
         "--strategy=select-one",
         "--action=delete-discarded",

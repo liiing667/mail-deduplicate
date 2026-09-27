@@ -32,7 +32,7 @@ Both thresholds exist to catch mails that hash alike without being copies, so tu
 | `--content-threshold=-1` alone | 1.8s  | 8,000         |
 | Both set to `-1`               | 1.0s  | 0             |
 
-That middle row is the surprise: dropping the content check alone changes nothing under the default `--hash-body skip`. A mail's size is the length of its body, and skip mode never reads bodies while hashing, so the *size* check drags them back on its own.
+That middle row is the surprise: dropping the content check alone changes nothing with `--hash-body skip`. A mail's size is the length of its body, and skip mode never reads bodies while hashing, so the *size* check drags them back on its own.
 
 Hash the body and that stops being true. `raw` and `normalized` compute each mail's size while hashing, so the cache stores it and the size check is served from the database:
 
@@ -178,8 +178,8 @@ Several runs can point at the same database. They only contend on the single wri
 
 | Mode         | 20,000 mails | Notes                                                                                |
 | ------------ | ------------ | ------------------------------------------------------------------------------------ |
-| `skip`       | `3.4s`       | The default. Headers alone are usually enough to identify duplicates.                |
+| `skip`       | `3.4s`       | Headers alone are usually enough to identify duplicates.                             |
 | `raw`        | `3.7s`       | Hashes the body as it is.                                                            |
-| `normalized` | `4.8s`       | Strips line breaks and spaces first, catching copies that differ only in whitespace. |
+| `normalized` | `4.8s`       | The default. Strips whitespace and case first, catching re-encoded copies.           |
 
-Reach for `raw` or `normalized` when header-based hashing groups mails you do not consider duplicates, rather than as a default.
+Reach for `skip` when speed matters more than telling apart mails that share their headers, and for `raw` when byte-level body differences must split copies apart.
